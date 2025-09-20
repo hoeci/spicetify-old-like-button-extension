@@ -206,7 +206,12 @@ initiateLikedSongs();
             },
             Spicetify.React.createElement(
                 "span",
-                { className: "Wrapper-sm-only Wrapper-small-only" },
+                {
+                    className: "Wrapper-sm-only Wrapper-small-only",
+                    style: {
+                        marginBottom: "-2px"
+                    }
+                },
                 Spicetify.React.createElement("svg", {
                     role: "img",
                     height: "16",
@@ -305,61 +310,115 @@ initiateLikedSongs();
 
 
     // Main view button insertion
-    function findVal(object, key, max = 10) {
-        if (object[key] !== undefined || !max) {
-            return object[key];
+    function findVal(obj, key, maxDepth = 15, visited = new Set()) {
+        if (!obj || typeof obj !== 'object' || maxDepth <= 0 || visited.has(obj)) {
+            return undefined;
+        }
+        visited.add(obj);
+
+        if (obj.hasOwnProperty(key)) {
+            return obj[key];
         }
 
-        for (const k in object) {
-            if (object[k] && typeof object[k] === "object") {
-                const value = findVal(object[k], key, --max);
-                if (value !== undefined) {
-                    return value;
+        for (const k in obj) {
+            if (obj.hasOwnProperty(k)) {
+                const result = findVal(obj[k], key, maxDepth - 1, visited);
+                if (result !== undefined) {
+                    return result;
                 }
             }
         }
-
         return undefined;
     }
 
-    const observer = new MutationObserver(mutationList => {
-        mutationList.forEach(mutation => {
-            mutation.addedNodes.forEach(node => {
-                const nodeMatch =
-                    node.attributes?.role?.value === "row"
-                        ? node.firstChild?.lastChild
-                        : node.firstChild?.attributes?.role?.value === "row"
-                            ? node.firstChild?.firstChild.lastChild
-                            : null;
+    const addLikeButtonToRow = (row) => {
+        if (row.classList.contains("old-like-button-injected")) {
+            return;
+        }
 
-                if (nodeMatch) {
-                    const entryPoint = nodeMatch.querySelector(":scope > button:not(:last-child):has([data-encore-id])");
+        const actionButtonsContainer = Array.from(row.querySelectorAll('div[role="gridcell"]')).pop();
+        if (!actionButtonsContainer) {
+            return;
+        }
 
-                    if (entryPoint) {
-                        const reactPropsKey = Object.keys(node).find(key => key.startsWith("__reactProps$"));
-                        const uri = findVal(node[reactPropsKey], "uri");
+        if (actionButtonsContainer.querySelector(".likeControl-wrapper")) {
+            row.classList.add("old-like-button-injected");
+            return;
+        }
 
-                        const likeButtonWrapper = document.createElement("div");
-                        likeButtonWrapper.className = "likeControl-wrapper";
-                        likeButtonWrapper.style.display = "contents";
-                        likeButtonWrapper.style.marginRight = 0;
+        const entryPoint = actionButtonsContainer.querySelector("button:not(:last-of-type)");
+        if (!entryPoint) {
+            return;
+        }
 
-                        const likeButtonElement = nodeMatch.insertBefore(likeButtonWrapper, entryPoint);
-                        Spicetify.ReactDOM.render(
-                            Spicetify.React.createElement(LikeButton, {
-                                uri,
-                                classList: entryPoint.classList
-                            }),
-                            likeButtonElement
-                        );
+        const reactPropsKey = Object.keys(row).find(key => key.startsWith("__reactProps$"));
+        if (!reactPropsKey) {
+            return;
+        }
+
+        const uri = findVal(row[reactPropsKey], "uri");
+        if (!uri || !uri.startsWith("spotify:track:")) {
+            return;
+        }
+
+        row.classList.add("old-like-button-injected");
+
+        const likeButtonWrapper = document.createElement("div");
+        likeButtonWrapper.className = "likeControl-wrapper";
+        likeButtonWrapper.style.display = "contents";
+
+        const likeButtonElement = entryPoint.parentElement.insertBefore(likeButtonWrapper, entryPoint);
+        Spicetify.ReactDOM.render(
+            Spicetify.React.createElement(LikeButton, {
+                uri,
+                classList: entryPoint.classList
+            }),
+            likeButtonElement
+        );
+    };
+
+    let tracklistObserver;
+
+    const processTracklist = (mainView) => {
+        const tracklist = mainView.querySelector(".main-trackList-indexable, div[data-testid='track-list']");
+        if (tracklist) {
+            tracklist.querySelectorAll('.main-trackList-trackListRow, div[role="row"][aria-selected]').forEach(addLikeButtonToRow);
+        }
+    };
+
+    const connectObserver = () => {
+        if (tracklistObserver) {
+            tracklistObserver.disconnect();
+        }
+
+        const mainView = document.querySelector("main");
+        if (!mainView) {
+            setTimeout(connectObserver, 250);
+            return;
+        }
+
+        processTracklist(mainView);
+
+        tracklistObserver = new MutationObserver((mutations) => {
+            for (const mutation of mutations) {
+                for (const node of mutation.addedNodes) {
+                    if (node.nodeType === Node.ELEMENT_NODE) {
+                        if (node.matches('.main-trackList-trackListRow, div[role="row"][aria-selected]')) {
+                            addLikeButtonToRow(node);
+                        } else {
+                            node.querySelectorAll('.main-trackList-trackListRow, div[role="row"][aria-selected]').forEach(addLikeButtonToRow);
+                        }
                     }
                 }
-            });
+            }
         });
-    });
 
-    observer.observe(document, {
-        subtree: true,
-        childList: true
-    });
+        tracklistObserver.observe(mainView, {
+            childList: true,
+            subtree: true,
+        });
+    };
+
+    Spicetify.Platform.History.listen(connectObserver);
+    connectObserver();
 })();
